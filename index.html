@@ -23,38 +23,11 @@
     .right { text-align:right; }
     .toggle { display:flex; align-items:center; gap:8px; }
     .btn-row { display:flex; flex-wrap:wrap; gap:8px; }
-    /* Lock overlay */
-    #lockOverlay {
-      position: fixed; inset: 0; background: #ffffff; z-index: 9999;
-      display: flex; align-items: center; justify-content: center; padding: 24px;
-    }
-    #lockCard {
-      width: 100%; max-width: 360px; border: 1px solid #e5e5e5; border-radius: 14px; padding: 16px;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.08);
-    }
-    #pin { font-size: 22px; letter-spacing: 6px; text-align: center; width: 100%; padding: 10px; }
-    .error { color:#b00020; }
+    .center { text-align:center; }
+    .pin { font-size:1.2rem; letter-spacing: 0.4ch; text-align:center; width:100%; padding:10px; }
   </style>
 </head>
 <body>
-  <div id="lockOverlay" hidden>
-    <div id="lockCard">
-      <h2 id="lockTitle">Set a 4‑digit passcode</h2>
-      <div id="setupBlock">
-        <input id="pinSetup1" type="password" inputmode="numeric" maxlength="4" placeholder="Enter 4 digits" style="width:100%; padding:10px; font-size:20px;">
-        <input id="pinSetup2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm passcode" style="width:100%; padding:10px; font-size:20px; margin-top:8px;">
-        <button id="savePin">Save Passcode</button>
-        <div class="muted">Stored only on this device. You can change it later in Settings.</div>
-        <div id="lockMsg" class="error"></div>
-      </div>
-      <div id="unlockBlock" hidden>
-        <input id="pin" type="password" inputmode="numeric" maxlength="4" placeholder="Enter passcode">
-        <button id="unlockBtn">Unlock</button>
-        <div id="unlockMsg" class="error"></div>
-      </div>
-    </div>
-  </div>
-
   <header>
     <h1>Daily Check‑In</h1>
     <nav>
@@ -64,7 +37,25 @@
     </nav>
   </header>
 
-  <section id="screen-checkin" class="card">
+  <!-- Passcode screens -->
+  <section id="screen-pass-setup" class="card" hidden>
+    <h2>Set a 4‑digit passcode</h2>
+    <input id="pin1" class="pin" inputmode="numeric" maxlength="4" placeholder="••••">
+    <label>Confirm passcode</label>
+    <input id="pin2" class="pin" inputmode="numeric" maxlength="4" placeholder="••••">
+    <button id="savePass">Save passcode</button>
+    <div id="passMsg" class="muted"></div>
+  </section>
+
+  <section id="screen-pass-unlock" class="card" hidden>
+    <h2>Enter passcode to unlock</h2>
+    <input id="pinUnlock" class="pin" inputmode="numeric" maxlength="4" placeholder="••••">
+    <button id="unlockBtn">Unlock</button>
+    <div id="unlockMsg" class="muted"></div>
+  </section>
+
+  <!-- Main app screens -->
+  <section id="screen-checkin" class="card" hidden>
     <div class="muted" id="now"></div>
     <label>Physical (1–5)</label>
     <div class="row">
@@ -114,24 +105,17 @@
   <section id="screen-settings" class="card" hidden>
     <h2>Settings</h2>
     <div class="toggle">
-      <input type="checkbox" id="syncEnabled">
-      <label for="syncEnabled">Enable encrypted sync</label>
+      <label for="autoLockMins">Auto‑lock after (minutes)</label>
+      <input id="autoLockMins" type="number" min="1" max="60" value="2" style="width:80px">
     </div>
-    <label>Sync passphrase (keep secret)</label>
-    <input type="password" id="passphrase" placeholder="e.g., correct horse battery staple" style="width:100%">
-    <label>n8n Webhook URL (optional)</label>
-    <input type="url" id="webhook" placeholder="https://your-n8n/rest/webhook/checkin" style="width:100%">
     <div class="btn-row">
-      <button id="runSync">Run Sync Now</button>
+      <button id="lockNow">Lock Now</button>
+      <button id="changePass">Change Passcode</button>
       <button id="exportCsv">Export CSV</button>
       <button id="exportJson">Backup JSON</button>
-      <button id="lockNow">Lock Now</button>
-      <button id="changePin">Change Passcode</button>
       <button id="clearAll" style="background:#fee">Clear All Data</button>
     </div>
-    <label>Auto‑lock after (minutes)</label>
-    <input id="idleMinutes" type="number" min="1" max="60" value="2" style="width:100px">
-    <div class="muted">Entries and settings stay on this device. Passcode is not recoverable if forgotten.</div>
+    <div class="muted">Data stays on this device. Passcode is stored as a salted hash, not the raw digits.</div>
   </section>
 
   <script src="app.js"></script>

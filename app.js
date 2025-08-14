@@ -1,4 +1,6 @@
-// ---- Storage (IndexedDB) ----
+// Passcode-enabled PWA (local-only).
+
+/* ---------------- IndexedDB ---------------- */
 const DB_NAME = 'checkin-db', STORE = 'entries';
 let db;
 const openDB = () => new Promise((resolve, reject) => {
@@ -18,33 +20,138 @@ const clearAllStore = () => new Promise((res, rej) => {
   const r = txStore('readwrite').clear(); r.onsuccess = () => res(); r.onerror = () => rej(r.error);
 });
 
-// ---- UI helpers ----
+/* ---------------- UI helpers ---------------- */
 const byId = (id) => document.getElementById(id);
 const screens = {
+  passSetup: byId('screen-pass-setup'),
+  passUnlock: byId('screen-pass-unlock'),
   checkin: byId('screen-checkin'),
   history: byId('screen-history'),
   settings: byId('screen-settings'),
 };
-const show = (name) => {
+function showOnly(name){
   Object.values(screens).forEach(el => el.hidden = true);
   screens[name].hidden = false;
-};
-byId('tab-checkin').onclick = () => show('checkin');
-byId('tab-history').onclick = () => { renderHistory(); show('history'); };
-byId('tab-settings').onclick = () => show('settings');
+}
 
-// ---- Clock ----
+/* ---------------- Tabs ---------------- */
+byId('tab-checkin').onclick = () => { if (guardUnlocked()) { renderNow(); showOnly('checkin'); } };
+byId('tab-history').onclick = () => { if (guardUnlocked()) { renderHistory(); showOnly('history'); } };
+byId('tab-settings').onclick = () => { if (guardUnlocked()) showOnly('settings'); };
+
+/* ---------------- Passcode logic ---------------- */
+const LS_KEY_HASH = 'pinHash';
+const LS_KEY_SALT = 'pinSalt';
+const LS_KEY_AUTOLOCK = 'autoLockMins';
+let unlocked = false;
+let idleTimer = null;
+
+async function sha256(str){ // hex
+  const data = new TextEncoder().encode(str);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+function randHex(len=16){
+  const a = new Uint8Array(len/2);
+  crypto.getRandomValues(a);
+  return Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function resetIdleTimer(){
+  clearTimeout(idleTimer);
+  const mins = Number(localStorage.getItem(LS_KEY_AUTOLOCK) || 2);
+  idleTimer = setTimeout(() => lockNow(), mins*60*1000);
+}
+function lockNow(){
+  unlocked = false;
+  showOnly('passUnlock');
+}
+function guardUnlocked(){
+  if(!unlocked){
+    showOnly('passUnlock');
+    return false;
+  }
+  resetIdleTimer();
+  return true;
+}
+
+async function initPass(){
+  const has = localStorage.getItem(LS_KEY_HASH);
+  if(!has){
+    showOnly('passSetup');
+  } else {
+    showOnly('passUnlock');
+  }
+}
+
+/* Set passcode */
+byId('savePass').addEventListener('click', async () => {
+  const p1 = byId('pin1').value.trim();
+  const p2 = byId('pin2').value.trim();
+  const msg = byId('passMsg');
+  if(p1.length !== 4 || !/^\d{4}$/.test(p1)){ msg.textContent = 'Please enter 4 digits.'; return; }
+  if(p1 !== p2){ msg.textContent = 'Passcodes do not match.'; return; }
+  const salt = randHex(16);
+  const h = await sha256(p1 + ':' + salt);
+  localStorage.setItem(LS_KEY_HASH, h);
+  localStorage.setItem(LS_KEY_SALT, salt);
+  localStorage.setItem(LS_KEY_AUTOLOCK, '2');
+  byId('pin1').value = ''; byId('pin2').value = '';
+  msg.textContent = 'Passcode saved.';
+  unlocked = true;
+  showOnly('checkin');
+  resetIdleTimer();
+});
+
+/* Unlock */
+byId('unlockBtn').addEventListener('click', async () => {
+  const pin = byId('pinUnlock').value.trim();
+  const salt = localStorage.getItem(LS_KEY_SALT);
+  const hash = localStorage.getItem(LS_KEY_HASH);
+  const msg = byId('unlockMsg');
+  if(!salt || !hash){ msg.textContent = 'No passcode set. Reload and set one.'; return; }
+  const h = await sha256(pin + ':' + salt);
+  if(h === hash){
+    byId('pinUnlock').value='';
+    unlocked = true;
+    showOnly('checkin');
+    resetIdleTimer();
+  } else {
+    msg.textContent = 'Incorrect passcode.';
+  }
+});
+
+/* Change passcode */
+byId('changePass').addEventListener('click', () => {
+  if(!guardUnlocked()) return;
+  showOnly('passSetup');
+});
+
+/* Lock now */
+byId('lockNow').addEventListener('click', () => lockNow());
+
+/* Auto-lock setting */
+const autoLockMinsInput = byId('autoLockMins');
+autoLockMinsInput.value = localStorage.getItem(LS_KEY_AUTOLOCK) || '2';
+autoLockMinsInput.addEventListener('change', () => {
+  const v = Math.max(1, Math.min(60, Number(autoLockMinsInput.value||2)));
+  localStorage.setItem(LS_KEY_AUTOLOCK, String(v));
+  resetIdleTimer();
+});
+
+/* ---------------- Now / check-in ---------------- */
 const nowEl = byId('now');
-const updateNow = () => {
+function renderNow(){
   const d = new Date();
   nowEl.textContent = d.toLocaleString('en-GB', { timeZone: 'Europe/London', weekday:'short', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
-};
-setInterval(updateNow, 1000); updateNow();
+}
+setInterval(() => { if(unlocked) renderNow(); }, 1000);
 
-// ---- Save entry ----
+/* Save entry */
 const saveBtn = byId('save');
 const saveStatus = byId('saveStatus');
-saveBtn.onclick = async () => {
+saveBtn.addEventListener('click', async () => {
+  if(!guardUnlocked()) return;
   await openDB();
   const entry = {
     createdAt: new Date().toISOString(),
@@ -61,9 +168,10 @@ saveBtn.onclick = async () => {
   saveStatus.textContent = 'Saved locally ✔';
   setTimeout(() => saveStatus.textContent = '', 1500);
   byId('notes').value = '';
-};
+  resetIdleTimer();
+});
 
-// ---- History ----
+/* History */
 async function renderHistory(){
   await openDB();
   const all = (await getAll()).sort((a,b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -81,7 +189,7 @@ async function renderHistory(){
   byId('avg').textContent = last7.length ? `7‑day average: ${avg}` : 'No entries yet.';
 }
 
-// ---- Export / Clear ----
+/* Export */
 function download(filename, text) {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -92,7 +200,8 @@ function download(filename, text) {
   URL.revokeObjectURL(url);
   a.remove();
 }
-byId('exportCsv').onclick = async () => {
+byId('exportCsv').addEventListener('click', async () => {
+  if(!guardUnlocked()) return;
   await openDB();
   const all = await getAll();
   const header = ['createdAt','tz','physical','emotional','mental','spiritual','average','mood','notes'];
@@ -100,15 +209,17 @@ byId('exportCsv').onclick = async () => {
     const v = (e[h] ?? '').toString().replace(/"/g,'""');
     return `"${v}"`;
   }).join(','));
-  const csv = header.join(',') + '\n' + rows.join('\n');
+  const csv = header.join(',') + '\\n' + rows.join('\\n');
   download('checkins.csv', csv);
-};
-byId('exportJson').onclick = async () => {
+});
+byId('exportJson').addEventListener('click', async () => {
+  if(!guardUnlocked()) return;
   await openDB();
   const all = await getAll();
   download('checkins.json', JSON.stringify(all, null, 2));
-};
-byId('clearAll').onclick = async () => {
+});
+byId('clearAll').addEventListener('click', async () => {
+  if(!guardUnlocked()) return;
   const ok = confirm('This will permanently delete all local entries on this device. Continue?');
   if (!ok) return;
   await openDB();
@@ -116,162 +227,12 @@ byId('clearAll').onclick = async () => {
   alert('All local data cleared.');
   const ul = byId('history'); if (ul) ul.innerHTML = '';
   const avg = byId('avg'); if (avg) avg.textContent = 'No entries yet.';
-};
-
-// ---- Optional encrypted sync placeholder ----
-async function deriveKey(passphrase){
-  const enc = new TextEncoder().encode(passphrase);
-  const keyMaterial = await crypto.subtle.importKey('raw', enc, {name:'PBKDF2'}, false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    {name:'PBKDF2', salt:new TextEncoder().encode('checkin-salt'), iterations:100000, hash:'SHA-256'},
-    keyMaterial,
-    {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']
-  );
-}
-async function encryptJSON(obj, key){
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = new TextEncoder().encode(JSON.stringify(obj));
-  const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, data);
-  return { iv: Array.from(iv), payload: Array.from(new Uint8Array(cipher)) };
-}
-byId('runSync').onclick = async () => {
-  const enabled = byId('syncEnabled').checked;
-  const pass = byId('passphrase').value;
-  const url = byId('webhook').value;
-  if (!enabled) { alert('Enable sync first.'); return; }
-  if (!pass || !url) { alert('Passphrase + Webhook URL required.'); return; }
-  await openDB();
-  const all = await getAll();
-  const key = await deriveKey(pass);
-  const encrypted = await encryptJSON({ entries: all }, key);
-  try{
-    const r = await fetch(url, {
-      method:'POST',
-      headers:{ 'Content-Type': 'application/json' },
-      body: JSON.stringify({ encrypted })
-    });
-    if(!r.ok) throw new Error(await r.text());
-    alert('Synced (encrypted).');
-  }catch(e){
-    alert('Sync failed: ' + e.message);
-  }
-};
-
-// ---- PASSCODE LOCK ----
-const lockOverlay = byId('lockOverlay');
-const lockTitle = byId('lockTitle');
-const setupBlock = byId('setupBlock');
-const unlockBlock = byId('unlockBlock');
-const pinSetup1 = byId('pinSetup1');
-const pinSetup2 = byId('pinSetup2');
-const savePin = byId('savePin');
-const lockMsg = byId('lockMsg');
-const pinInput = byId('pin');
-const unlockBtn = byId('unlockBtn');
-const unlockMsg = byId('unlockMsg');
-const lockNowBtn = byId('lockNow');
-const changePinBtn = byId('changePin');
-const idleMinutesInput = byId('idleMinutes');
-
-// Simple hash using SHA-256
-async function sha256(str){
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function getStored(key){ return localStorage.getItem(key); }
-function setStored(key,val){ localStorage.setItem(key, val); }
-function removeStored(key){ localStorage.removeItem(key); }
-
-function isPinSet(){ return !!getStored('pinHash'); }
-
-async function showSetup(){
-  lockTitle.textContent = 'Set a 4‑digit passcode';
-  setupBlock.hidden = false;
-  unlockBlock.hidden = true;
-  lockOverlay.hidden = false;
-  pinSetup1.value = ''; pinSetup2.value = '';
-  lockMsg.textContent = '';
-  pinSetup1.focus();
-}
-
-async function showUnlock(){
-  lockTitle.textContent = 'Enter passcode to unlock';
-  setupBlock.hidden = true;
-  unlockBlock.hidden = false;
-  lockOverlay.hidden = false;
-  pinInput.value = '';
-  unlockMsg.textContent = '';
-  pinInput.focus();
-}
-
-async function unlock(){
-  const pin = pinInput.value.trim();
-  if(pin.length !== 4){ unlockMsg.textContent = 'Enter 4 digits.'; return; }
-  const salt = getStored('pinSalt') || '';
-  const hash = await sha256(pin + ':' + salt);
-  if(hash === getStored('pinHash')){
-    lockOverlay.hidden = true;
-    resetIdleTimer();
-  } else {
-    unlockMsg.textContent = 'Incorrect passcode.';
-  }
-}
-
-savePin.onclick = async () => {
-  const a = pinSetup1.value.trim();
-  const b = pinSetup2.value.trim();
-  if(a.length !== 4 || b.length !== 4){ lockMsg.textContent = 'Use exactly 4 digits.'; return; }
-  if(a !== b){ lockMsg.textContent = 'Passcodes do not match.'; return; }
-  const salt = Math.random().toString(36).slice(2);
-  const hash = await sha256(a + ':' + salt);
-  setStored('pinSalt', salt);
-  setStored('pinHash', hash);
-  lockOverlay.hidden = true;
-  resetIdleTimer();
-};
-
-unlockBtn.onclick = unlock;
-pinInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') unlock(); });
-
-lockNowBtn.onclick = () => { showUnlock(); };
-
-changePinBtn.onclick = () => {
-  // Require current pin to change
-  const current = prompt('Enter current 4‑digit passcode:');
-  if(!current) return;
-  const salt = getStored('pinSalt') || '';
-  sha256(current + ':' + salt).then(h => {
-    if(h !== getStored('pinHash')){ alert('Incorrect current passcode.'); return; }
-    const a = prompt('New 4‑digit passcode:');
-    const b = prompt('Confirm new passcode:');
-    if(!a || !b || a.length!==4 || b.length!==4 || a!==b){ alert('Passcode change cancelled or invalid.'); return; }
-    const newSalt = Math.random().toString(36).slice(2);
-    sha256(a + ':' + newSalt).then(newHash => {
-      setStored('pinSalt', newSalt);
-      setStored('pinHash', newHash);
-      alert('Passcode updated.');
-    });
-  });
-};
-
-// Idle auto-lock
-let idleTimer;
-function resetIdleTimer(){
-  const mins = Math.max(1, Number(idleMinutesInput.value||2));
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(()=>{
-    showUnlock();
-  }, mins * 60 * 1000);
-}
-['click','keydown','touchstart','mousemove'].forEach(evt => {
-  window.addEventListener(evt, ()=>{
-    if(lockOverlay.hidden) resetIdleTimer();
-  }, {passive:true});
 });
 
-// Gate on load
-(function initLock(){
-  if(isPinSet()){ showUnlock(); }
-  else { showSetup(); }
-})();
+/* Global activity resets idle timer */
+['click','touchstart','keydown','mousemove','scroll'].forEach(evt =>
+  window.addEventListener(evt, () => unlocked && resetIdleTimer(), { passive:true })
+);
+
+/* Init */
+initPass();
