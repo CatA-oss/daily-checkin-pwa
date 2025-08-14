@@ -1,4 +1,4 @@
-// --- Tiny IndexedDB wrapper ---
+// ---- Storage (IndexedDB) ----
 const DB_NAME = 'checkin-db', STORE = 'entries';
 let db;
 const openDB = () => new Promise((resolve, reject) => {
@@ -14,11 +14,11 @@ const addEntry = (entry) => new Promise((res, rej) => {
 const getAll = () => new Promise((res, rej) => {
   const r = txStore().getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
 });
-const putEntry = (entry) => new Promise((res, rej) => {
-  const r = txStore('readwrite').put(entry); r.onsuccess = () => res(); r.onerror = () => rej(r.error);
+const clearAllStore = () => new Promise((res, rej) => {
+  const r = txStore('readwrite').clear(); r.onsuccess = () => res(); r.onerror = () => rej(r.error);
 });
 
-// --- UI helpers ---
+// ---- UI helpers ----
 const byId = (id) => document.getElementById(id);
 const screens = {
   checkin: byId('screen-checkin'),
@@ -33,7 +33,7 @@ byId('tab-checkin').onclick = () => show('checkin');
 byId('tab-history').onclick = () => { renderHistory(); show('history'); };
 byId('tab-settings').onclick = () => show('settings');
 
-// --- Now text ---
+// ---- Clock ----
 const nowEl = byId('now');
 const updateNow = () => {
   const d = new Date();
@@ -41,7 +41,7 @@ const updateNow = () => {
 };
 setInterval(updateNow, 1000); updateNow();
 
-// --- Save entry ---
+// ---- Save entry ----
 const saveBtn = byId('save');
 const saveStatus = byId('saveStatus');
 saveBtn.onclick = async () => {
@@ -63,7 +63,7 @@ saveBtn.onclick = async () => {
   byId('notes').value = '';
 };
 
-// --- History render (last 7 days) ---
+// ---- History ----
 async function renderHistory(){
   await openDB();
   const all = (await getAll()).sort((a,b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -81,7 +81,44 @@ async function renderHistory(){
   byId('avg').textContent = last7.length ? `7‑day average: ${avg}` : 'No entries yet.';
 }
 
-// --- Simple E2E encryption for sync ---
+// ---- Export / Clear ----
+function download(filename, text) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  URL.revokeObjectURL(url);
+  a.remove();
+}
+byId('exportCsv').onclick = async () => {
+  await openDB();
+  const all = await getAll();
+  const header = ['createdAt','tz','physical','emotional','mental','spiritual','average','mood','notes'];
+  const rows = all.map(e => header.map(h => {
+    const v = (e[h] ?? '').toString().replace(/"/g,'""');
+    return `"${v}"`;
+  }).join(','));
+  const csv = header.join(',') + '\n' + rows.join('\n');
+  download('checkins.csv', csv);
+};
+byId('exportJson').onclick = async () => {
+  await openDB();
+  const all = await getAll();
+  download('checkins.json', JSON.stringify(all, null, 2));
+};
+byId('clearAll').onclick = async () => {
+  const ok = confirm('This will permanently delete all local entries on this device. Continue?');
+  if (!ok) return;
+  await openDB();
+  await clearAllStore();
+  alert('All local data cleared.');
+  const ul = byId('history'); if (ul) ul.innerHTML = '';
+  const avg = byId('avg'); if (avg) avg.textContent = 'No entries yet.';
+};
+
+// ---- Optional encrypted sync placeholder ----
 async function deriveKey(passphrase){
   const enc = new TextEncoder().encode(passphrase);
   const keyMaterial = await crypto.subtle.importKey('raw', enc, {name:'PBKDF2'}, false, ['deriveKey']);
@@ -97,8 +134,6 @@ async function encryptJSON(obj, key){
   const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, data);
   return { iv: Array.from(iv), payload: Array.from(new Uint8Array(cipher)) };
 }
-
-// --- Sync (optional, sends encrypted blob to n8n) ---
 byId('runSync').onclick = async () => {
   const enabled = byId('syncEnabled').checked;
   const pass = byId('passphrase').value;
@@ -112,7 +147,7 @@ byId('runSync').onclick = async () => {
   try{
     const r = await fetch(url, {
       method:'POST',
-      headers:{ 'Content-Type':'application/json' },
+      headers:{ 'Content-Type': 'application/json' },
       body: JSON.stringify({ encrypted })
     });
     if(!r.ok) throw new Error(await r.text());
@@ -121,3 +156,122 @@ byId('runSync').onclick = async () => {
     alert('Sync failed: ' + e.message);
   }
 };
+
+// ---- PASSCODE LOCK ----
+const lockOverlay = byId('lockOverlay');
+const lockTitle = byId('lockTitle');
+const setupBlock = byId('setupBlock');
+const unlockBlock = byId('unlockBlock');
+const pinSetup1 = byId('pinSetup1');
+const pinSetup2 = byId('pinSetup2');
+const savePin = byId('savePin');
+const lockMsg = byId('lockMsg');
+const pinInput = byId('pin');
+const unlockBtn = byId('unlockBtn');
+const unlockMsg = byId('unlockMsg');
+const lockNowBtn = byId('lockNow');
+const changePinBtn = byId('changePin');
+const idleMinutesInput = byId('idleMinutes');
+
+// Simple hash using SHA-256
+async function sha256(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function getStored(key){ return localStorage.getItem(key); }
+function setStored(key,val){ localStorage.setItem(key, val); }
+function removeStored(key){ localStorage.removeItem(key); }
+
+function isPinSet(){ return !!getStored('pinHash'); }
+
+async function showSetup(){
+  lockTitle.textContent = 'Set a 4‑digit passcode';
+  setupBlock.hidden = false;
+  unlockBlock.hidden = true;
+  lockOverlay.hidden = false;
+  pinSetup1.value = ''; pinSetup2.value = '';
+  lockMsg.textContent = '';
+  pinSetup1.focus();
+}
+
+async function showUnlock(){
+  lockTitle.textContent = 'Enter passcode to unlock';
+  setupBlock.hidden = true;
+  unlockBlock.hidden = false;
+  lockOverlay.hidden = false;
+  pinInput.value = '';
+  unlockMsg.textContent = '';
+  pinInput.focus();
+}
+
+async function unlock(){
+  const pin = pinInput.value.trim();
+  if(pin.length !== 4){ unlockMsg.textContent = 'Enter 4 digits.'; return; }
+  const salt = getStored('pinSalt') || '';
+  const hash = await sha256(pin + ':' + salt);
+  if(hash === getStored('pinHash')){
+    lockOverlay.hidden = true;
+    resetIdleTimer();
+  } else {
+    unlockMsg.textContent = 'Incorrect passcode.';
+  }
+}
+
+savePin.onclick = async () => {
+  const a = pinSetup1.value.trim();
+  const b = pinSetup2.value.trim();
+  if(a.length !== 4 || b.length !== 4){ lockMsg.textContent = 'Use exactly 4 digits.'; return; }
+  if(a !== b){ lockMsg.textContent = 'Passcodes do not match.'; return; }
+  const salt = Math.random().toString(36).slice(2);
+  const hash = await sha256(a + ':' + salt);
+  setStored('pinSalt', salt);
+  setStored('pinHash', hash);
+  lockOverlay.hidden = true;
+  resetIdleTimer();
+};
+
+unlockBtn.onclick = unlock;
+pinInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') unlock(); });
+
+lockNowBtn.onclick = () => { showUnlock(); };
+
+changePinBtn.onclick = () => {
+  // Require current pin to change
+  const current = prompt('Enter current 4‑digit passcode:');
+  if(!current) return;
+  const salt = getStored('pinSalt') || '';
+  sha256(current + ':' + salt).then(h => {
+    if(h !== getStored('pinHash')){ alert('Incorrect current passcode.'); return; }
+    const a = prompt('New 4‑digit passcode:');
+    const b = prompt('Confirm new passcode:');
+    if(!a || !b || a.length!==4 || b.length!==4 || a!==b){ alert('Passcode change cancelled or invalid.'); return; }
+    const newSalt = Math.random().toString(36).slice(2);
+    sha256(a + ':' + newSalt).then(newHash => {
+      setStored('pinSalt', newSalt);
+      setStored('pinHash', newHash);
+      alert('Passcode updated.');
+    });
+  });
+};
+
+// Idle auto-lock
+let idleTimer;
+function resetIdleTimer(){
+  const mins = Math.max(1, Number(idleMinutesInput.value||2));
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(()=>{
+    showUnlock();
+  }, mins * 60 * 1000);
+}
+['click','keydown','touchstart','mousemove'].forEach(evt => {
+  window.addEventListener(evt, ()=>{
+    if(lockOverlay.hidden) resetIdleTimer();
+  }, {passive:true});
+});
+
+// Gate on load
+(function initLock(){
+  if(isPinSet()){ showUnlock(); }
+  else { showSetup(); }
+})();

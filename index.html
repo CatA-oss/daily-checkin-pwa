@@ -22,9 +22,39 @@
     .list li { padding:10px 0; border-bottom:1px dashed #ddd; }
     .right { text-align:right; }
     .toggle { display:flex; align-items:center; gap:8px; }
+    .btn-row { display:flex; flex-wrap:wrap; gap:8px; }
+    /* Lock overlay */
+    #lockOverlay {
+      position: fixed; inset: 0; background: #ffffff; z-index: 9999;
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    #lockCard {
+      width: 100%; max-width: 360px; border: 1px solid #e5e5e5; border-radius: 14px; padding: 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.08);
+    }
+    #pin { font-size: 22px; letter-spacing: 6px; text-align: center; width: 100%; padding: 10px; }
+    .error { color:#b00020; }
   </style>
 </head>
 <body>
+  <div id="lockOverlay" hidden>
+    <div id="lockCard">
+      <h2 id="lockTitle">Set a 4‑digit passcode</h2>
+      <div id="setupBlock">
+        <input id="pinSetup1" type="password" inputmode="numeric" maxlength="4" placeholder="Enter 4 digits" style="width:100%; padding:10px; font-size:20px;">
+        <input id="pinSetup2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm passcode" style="width:100%; padding:10px; font-size:20px; margin-top:8px;">
+        <button id="savePin">Save Passcode</button>
+        <div class="muted">Stored only on this device. You can change it later in Settings.</div>
+        <div id="lockMsg" class="error"></div>
+      </div>
+      <div id="unlockBlock" hidden>
+        <input id="pin" type="password" inputmode="numeric" maxlength="4" placeholder="Enter passcode">
+        <button id="unlockBtn">Unlock</button>
+        <div id="unlockMsg" class="error"></div>
+      </div>
+    </div>
+  </div>
+
   <header>
     <h1>Daily Check‑In</h1>
     <nav>
@@ -91,8 +121,17 @@
     <input type="password" id="passphrase" placeholder="e.g., correct horse battery staple" style="width:100%">
     <label>n8n Webhook URL (optional)</label>
     <input type="url" id="webhook" placeholder="https://your-n8n/rest/webhook/checkin" style="width:100%">
-    <button id="runSync">Run Sync Now</button>
-    <div class="muted">Local‑only by default. If sync is on, entries are encrypted on your device before sending.</div>
+    <div class="btn-row">
+      <button id="runSync">Run Sync Now</button>
+      <button id="exportCsv">Export CSV</button>
+      <button id="exportJson">Backup JSON</button>
+      <button id="lockNow">Lock Now</button>
+      <button id="changePin">Change Passcode</button>
+      <button id="clearAll" style="background:#fee">Clear All Data</button>
+    </div>
+    <label>Auto‑lock after (minutes)</label>
+    <input id="idleMinutes" type="number" min="1" max="60" value="2" style="width:100px">
+    <div class="muted">Entries and settings stay on this device. Passcode is not recoverable if forgotten.</div>
   </section>
 
   <script src="app.js"></script>
